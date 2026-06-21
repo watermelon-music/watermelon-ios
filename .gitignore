@@ -4,6 +4,9 @@
 *.pyc
 *.swp
 .DS_Store
+# macOS AppleDouble metadata files (created on exFAT/FAT volumes)
+._*
+.AppleDouble
 .atom/
 .build/
 .buildlog/
