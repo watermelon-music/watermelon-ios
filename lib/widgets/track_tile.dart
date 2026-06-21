@@ -5,7 +5,8 @@ import '../models/track.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../theme/app_typography.dart';
-import '../state/player_controller.dart';
+import '../state/repository_providers.dart';
+import '../utils/track_song.dart';
 import 'like_button.dart';
 
 /// A track row used in the playlist track list: optional leading number,
@@ -26,13 +27,18 @@ class TrackTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isCurrent = ref.watch(
-      playerProvider.select((s) => s.track?.id == track.id),
+      playbackStateProvider.select((s) => s.currentSong?.id == track.id),
     );
 
     return InkWell(
-      onTap: () => ref
-          .read(playerProvider.notifier)
-          .play(track, queue: queue.isEmpty ? [track] : queue),
+      onTap: () {
+        final tracks = queue.isEmpty ? [track] : queue;
+        final start = tracks.indexWhere((t) => t.id == track.id);
+        ref.read(playbackControllerProvider).playQueue(
+              tracks.toSongs(),
+              startIndex: start < 0 ? 0 : start,
+            );
+      },
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 9),
         child: Row(

@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/app_logger.dart';
+import '../../core/result.dart';
+import '../../domain/auth/auth_validators.dart';
+import '../../state/repository_providers.dart';
 import '../../theme/app_assets.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
@@ -11,8 +16,61 @@ import '../../widgets/social_button.dart';
 import '../../widgets/square_icon_button.dart';
 
 /// Screen 02 — Log in.
-class LoginScreen extends StatelessWidget {
+class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
+
+  @override
+  ConsumerState<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends ConsumerState<LoginScreen> {
+  final _email = TextEditingController();
+  final _password = TextEditingController();
+  bool _submitting = false;
+
+  @override
+  void dispose() {
+    _email.dispose();
+    _password.dispose();
+    super.dispose();
+  }
+
+  void _snack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _submit() async {
+    if (_submitting) return;
+    final email = _email.text.trim();
+    final password = _password.text;
+
+    if (!AuthValidators.isValidEmail(email)) {
+      _snack(AuthValidators.emailError(email)!);
+      return;
+    }
+    if (!AuthValidators.isValidPassword(password)) {
+      _snack(AuthValidators.passwordError(password)!);
+      return;
+    }
+
+    setState(() => _submitting = true);
+    AppLog.auth('signIn start', {'email': email});
+    final result = await ref.read(authRepositoryProvider).signIn(email, password);
+    if (!mounted) return;
+    setState(() => _submitting = false);
+
+    switch (result) {
+      case Ok():
+        AppLog.auth('signIn OK → /home', {'email': email});
+        context.go('/home');
+      case Err(:final error):
+        AppLog.error('auth', 'signIn failed', error: error, data: {'email': email});
+        _snack(authErrorMessage(error));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -63,17 +121,19 @@ class LoginScreen extends StatelessWidget {
                   Text('Log in to pick up where the music left off.',
                       style: AppType.bodySm.copyWith(color: AppColors.textSecondary)),
                   const SizedBox(height: 30),
-                  const AuthField(
+                  AuthField(
                     label: 'Email',
                     iconAsset: AppAssets.mail,
-                    initialValue: 'avery@watermelon.fm',
+                    controller: _email,
+                    enabled: !_submitting,
                     keyboardType: TextInputType.emailAddress,
                   ),
                   const SizedBox(height: AppSpacing.lg),
-                  const AuthField(
+                  AuthField(
                     label: 'Password',
                     iconAsset: AppAssets.lock,
-                    initialValue: 'watermelon',
+                    controller: _password,
+                    enabled: !_submitting,
                     obscure: true,
                   ),
                   const SizedBox(height: 14),
@@ -83,7 +143,10 @@ class LoginScreen extends StatelessWidget {
                         style: AppType.label.copyWith(color: AppColors.primaryBright)),
                   ),
                   const SizedBox(height: 22),
-                  PrimaryButton('Log in', onPressed: () => context.go('/home')),
+                  PrimaryButton(
+                    _submitting ? 'Logging in…' : 'Log in',
+                    onPressed: _submitting ? null : _submit,
+                  ),
                   const SizedBox(height: AppSpacing.xl),
                   const _OrDivider(),
                   const SizedBox(height: AppSpacing.xl),

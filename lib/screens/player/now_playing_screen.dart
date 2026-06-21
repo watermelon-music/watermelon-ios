@@ -1,15 +1,17 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide RepeatMode;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../data/mock_data.dart';
 import '../../theme/app_assets.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
 import '../../utils/format.dart';
-import '../../state/player_controller.dart';
+import '../../state/playback_controller.dart';
+import '../../state/repository_providers.dart';
 import '../../widgets/app_icon.dart';
+import '../../widgets/cover_image.dart';
+import '../../widgets/download_button.dart';
 import '../../widgets/like_button.dart';
 import '../../widgets/pressable.dart';
 
@@ -19,9 +21,37 @@ class NowPlayingScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final player = ref.watch(playerProvider);
-    final track = player.track ?? MockData.nowPlayingDefault;
-    final notifier = ref.read(playerProvider.notifier);
+    final state = ref.watch(playbackStateProvider);
+    final controller = ref.read(playbackControllerProvider);
+    final song = state.currentSong;
+
+    if (song == null) {
+      return Scaffold(
+        body: DecoratedBox(
+          decoration: const BoxDecoration(gradient: AppColors.playerGradient),
+          child: SafeArea(
+            child: Column(
+              children: [
+                _Header(onClose: () => context.pop()),
+                const Spacer(),
+                Center(
+                  child: Text('Nothing playing',
+                      style: AppType.body
+                          .copyWith(color: AppColors.textSecondary)),
+                ),
+                const Spacer(),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    final position = Duration(milliseconds: state.positionMs);
+    final duration = Duration(milliseconds: state.durationMs);
+    final progress = state.durationMs > 0
+        ? (state.positionMs / state.durationMs).clamp(0.0, 1.0)
+        : 0.0;
 
     return Scaffold(
       body: DecoratedBox(
@@ -42,7 +72,7 @@ class NowPlayingScreen extends ConsumerWidget {
                       boxShadow: AppShadow.artwork,
                     ),
                     clipBehavior: Clip.antiAlias,
-                    child: Image.asset(track.art, fit: BoxFit.cover),
+                    child: CoverImage(song.coverUrl, iconSize: 64),
                   ),
                 ),
                 const SizedBox(height: 34),
@@ -53,29 +83,32 @@ class NowPlayingScreen extends ConsumerWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(track.title,
+                          Text(song.title,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: AppType.h2.copyWith(fontSize: 26, letterSpacing: -0.8)),
                           const SizedBox(height: 5),
-                          Text(track.artist,
+                          Text(song.artistName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                               style: AppType.body.copyWith(color: AppColors.textSecondary)),
                         ],
                       ),
                     ),
                     LikeButton(
-                        id: track.id, size: 28, inactiveColor: AppColors.textPrimary),
+                        id: song.id, size: 28, inactiveColor: AppColors.textPrimary),
                   ],
                 ),
                 const SizedBox(height: 24),
                 _Scrubber(
-                  progress: player.progress,
-                  elapsed: formatDuration(player.position),
-                  remaining: formatRemaining(player.duration, player.position),
-                  onSeek: notifier.seekFraction,
+                  progress: progress.toDouble(),
+                  elapsed: formatDuration(position),
+                  remaining: formatRemaining(duration, position),
+                  onSeek: (f) =>
+                      controller.seekTo((state.durationMs * f).round()),
                 ),
                 const SizedBox(height: 20),
-                _Transport(player: player, notifier: notifier),
+                _Transport(state: state, controller: controller),
                 const Spacer(),
                 const _BottomBar(),
               ],
@@ -163,9 +196,9 @@ class _Scrubber extends StatelessWidget {
 }
 
 class _Transport extends StatelessWidget {
-  final PlayerState player;
-  final PlayerController notifier;
-  const _Transport({required this.player, required this.notifier});
+  final PlaybackState state;
+  final PlaybackController controller;
+  const _Transport({required this.state, required this.controller});
 
   @override
   Widget build(BuildContext context) {
@@ -174,19 +207,19 @@ class _Transport extends StatelessWidget {
       children: [
         GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTap: notifier.toggleShuffle,
+          onTap: controller.toggleShuffle,
           child: AppIcon(AppAssets.shuffle,
               size: 24,
-              color: player.shuffle ? AppColors.primaryBright : AppColors.textSecondary),
+              color: state.isShuffled ? AppColors.primaryBright : AppColors.textSecondary),
         ),
         GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTap: notifier.previous,
+          onTap: controller.previous,
           child: const AppIcon(AppAssets.skipPrev, size: 34),
         ),
         // Play / pause — 78px white circle.
         Pressable(
-          onTap: notifier.toggle,
+          onTap: controller.togglePlayPause,
           child: Container(
             width: 78,
             height: 78,
@@ -196,7 +229,11 @@ class _Transport extends StatelessWidget {
               boxShadow: [BoxShadow(color: Color(0x66000000), blurRadius: 30, offset: Offset(0, 10))],
             ),
             child: Icon(
-              player.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+              state.isBuffering
+                  ? Icons.hourglass_empty_rounded
+                  : (state.isPlaying
+                      ? Icons.pause_rounded
+                      : Icons.play_arrow_rounded),
               color: AppColors.wineDeep,
               size: 38,
             ),
@@ -204,17 +241,32 @@ class _Transport extends StatelessWidget {
         ),
         GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTap: notifier.next,
+          onTap: controller.next,
           child: const AppIcon(AppAssets.skipNext, size: 34),
         ),
         GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTap: notifier.cycleRepeat,
-          child: AppIcon(AppAssets.repeat,
-              size: 24,
-              color: player.repeat == LoopMode.off
-                  ? AppColors.textSecondary
-                  : AppColors.primaryBright),
+          onTap: controller.cycleRepeat,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              AppIcon(AppAssets.repeat,
+                  size: 24,
+                  color: state.repeatMode == RepeatMode.none
+                      ? AppColors.textSecondary
+                      : AppColors.primaryBright),
+              if (state.repeatMode == RepeatMode.one)
+                Positioned(
+                  right: -4,
+                  top: -4,
+                  child: Text('1',
+                      style: AppType.mono.copyWith(
+                          fontSize: 10,
+                          color: AppColors.primaryBright,
+                          fontWeight: FontWeight.w800)),
+                ),
+            ],
+          ),
         ),
       ],
     );
@@ -232,7 +284,7 @@ class _BottomBar extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           const AppIcon(AppAssets.lyrics, size: 22, color: AppColors.textSecondary),
-          const AppIcon(AppAssets.devices, size: 22, color: AppColors.textSecondary),
+          const _CurrentSongDownload(),
           Row(
             children: [
               const AppIcon(AppAssets.queue, size: 15),
@@ -244,5 +296,19 @@ class _BottomBar extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+/// Download control bound to the current song.
+class _CurrentSongDownload extends ConsumerWidget {
+  const _CurrentSongDownload();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final song = ref.watch(playbackStateProvider.select((s) => s.currentSong));
+    if (song == null) {
+      return const AppIcon(AppAssets.download, size: 22, color: AppColors.textSecondary);
+    }
+    return DownloadButton(song);
   }
 }

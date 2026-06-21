@@ -7,7 +7,8 @@ import 'package:go_router/go_router.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../theme/app_typography.dart';
-import '../state/player_controller.dart';
+import '../state/repository_providers.dart';
+import 'cover_image.dart';
 import 'like_button.dart';
 
 /// Floating frosted now-playing bar shown above the tab bar. Tapping it opens
@@ -17,9 +18,12 @@ class MiniPlayer extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final player = ref.watch(playerProvider);
-    final track = player.track;
-    if (track == null) return const SizedBox.shrink();
+    final state = ref.watch(playbackStateProvider);
+    final song = state.currentSong;
+    if (song == null) return const SizedBox.shrink();
+    final progress = state.durationMs > 0
+        ? (state.positionMs / state.durationMs).clamp(0.0, 1.0)
+        : 0.0;
 
     return GestureDetector(
       onTap: () => context.push('/player'),
@@ -41,7 +45,7 @@ class MiniPlayer extends ConsumerWidget {
                 Positioned.fill(
                   child: FractionallySizedBox(
                     alignment: Alignment.centerLeft,
-                    widthFactor: player.progress,
+                    widthFactor: progress,
                     child: const ColoredBox(color: Color(0x21FF1A1A)),
                   ),
                 ),
@@ -51,8 +55,8 @@ class MiniPlayer extends ConsumerWidget {
                     children: [
                       ClipRRect(
                         borderRadius: BorderRadius.circular(9),
-                        child: Image.asset(track.art,
-                            width: 42, height: 42, fit: BoxFit.cover),
+                        child: CoverImage(song.coverUrl,
+                            width: 42, height: 42, iconSize: 18),
                       ),
                       const SizedBox(width: AppSpacing.md),
                       Expanded(
@@ -60,11 +64,11 @@ class MiniPlayer extends ConsumerWidget {
                           mainAxisAlignment: MainAxisAlignment.center,
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(track.title,
+                            Text(song.title,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: AppType.label.copyWith(fontSize: 13)),
-                            Text(track.artist,
+                            Text(song.artistName,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: AppType.caption.copyWith(fontSize: 11)),
@@ -72,18 +76,22 @@ class MiniPlayer extends ConsumerWidget {
                         ),
                       ),
                       const SizedBox(width: AppSpacing.sm),
-                      LikeButton(id: track.id, size: 20),
+                      LikeButton(id: song.id, size: 20),
                       const SizedBox(width: AppSpacing.sm),
                       GestureDetector(
                         behavior: HitTestBehavior.opaque,
-                        onTap: () => ref.read(playerProvider.notifier).toggle(),
+                        onTap: () => ref
+                            .read(playbackControllerProvider)
+                            .togglePlayPause(),
                         child: SizedBox(
                           width: 40,
                           height: 40,
                           child: Icon(
-                            player.isPlaying
-                                ? Icons.pause_rounded
-                                : Icons.play_arrow_rounded,
+                            state.isBuffering
+                                ? Icons.hourglass_empty_rounded
+                                : (state.isPlaying
+                                    ? Icons.pause_rounded
+                                    : Icons.play_arrow_rounded),
                             color: AppColors.textPrimary,
                             size: 24,
                           ),

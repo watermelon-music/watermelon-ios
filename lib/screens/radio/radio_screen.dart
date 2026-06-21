@@ -7,7 +7,8 @@ import '../../theme/app_assets.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
-import '../../state/player_controller.dart';
+import '../../state/repository_providers.dart';
+import '../../utils/track_song.dart';
 import '../../widgets/pressable.dart';
 import '../../widgets/section_header.dart';
 import '../../widgets/station_tile.dart';
@@ -18,12 +19,11 @@ const double _kBottomInset = 158; // clears mini-player + tab bar
 class RadioScreen extends ConsumerWidget {
   const RadioScreen({super.key});
 
-  /// Starts the mock player from the default queue and opens Now Playing —
+  /// Starts playback from the default queue and opens Now Playing —
   /// the design's play buttons all route to screen 06.
   void _playAndOpen(BuildContext context, WidgetRef ref) {
-    ref.read(playerProvider.notifier).play(
-          MockData.sundaySliceTracks.first,
-          queue: MockData.sundaySliceTracks,
+    ref.read(playbackControllerProvider).playQueue(
+          MockData.sundaySliceTracks.toSongs(),
         );
     context.push('/player');
   }

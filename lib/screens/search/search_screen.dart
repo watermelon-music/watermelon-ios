@@ -1,30 +1,55 @@
-import 'package:flutter/material.dart';
+import 'dart:async';
 
-import '../../data/mock_data.dart';
-import '../../models/playlist.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../domain/models/song.dart';
 import '../../theme/app_assets.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
+import '../../state/repository_providers.dart';
 import '../../widgets/app_icon.dart';
 import '../../widgets/category_card.dart';
+import '../../widgets/cover_image.dart';
+import '../../widgets/download_button.dart';
 import '../../widgets/section_header.dart';
+import '../../data/mock_data.dart';
 
 const double _kBottomInset = 158;
 
-/// Screen 05 — Search.
-class SearchScreen extends StatefulWidget {
+/// Screen 05 — Search. Live YouTube search (debounced); tap a result to play,
+/// or download it for offline.
+class SearchScreen extends ConsumerStatefulWidget {
   const SearchScreen({super.key});
 
   @override
-  State<SearchScreen> createState() => _SearchScreenState();
+  ConsumerState<SearchScreen> createState() => _SearchScreenState();
 }
 
-class _SearchScreenState extends State<SearchScreen> {
-  final List<PlaylistRef> _recents = List.of(MockData.recents);
+class _SearchScreenState extends ConsumerState<SearchScreen> {
+  final _controller = TextEditingController();
+  Timer? _debounce;
+  String _query = '';
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _onChanged(String value) {
+    _debounce?.cancel();
+    // 300ms debounce (matches the Kotlin SearchViewModel).
+    _debounce = Timer(const Duration(milliseconds: 300), () {
+      if (mounted) setState(() => _query = value.trim());
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
+    final searching = _query.isNotEmpty;
     return Scaffold(
       backgroundColor: AppColors.bg,
       body: SafeArea(
@@ -37,7 +62,6 @@ class _SearchScreenState extends State<SearchScreen> {
               padding: const EdgeInsets.only(top: 6, bottom: 16),
               child: Text('Search', style: AppType.h2.copyWith(fontSize: 28)),
             ),
-            // Search field (presentational).
             Container(
               height: 50,
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -48,32 +72,37 @@ class _SearchScreenState extends State<SearchScreen> {
                   const SizedBox(width: 11),
                   Expanded(
                     child: TextField(
+                      controller: _controller,
+                      onChanged: _onChanged,
+                      textInputAction: TextInputAction.search,
                       cursorColor: AppColors.primary,
                       style: AppType.body.copyWith(fontSize: 15),
                       decoration: InputDecoration(
                         isCollapsed: true,
                         border: InputBorder.none,
                         filled: false,
-                        hintText: 'Artists, songs, podcasts',
+                        hintText: 'Songs, artists on YouTube',
                         hintStyle: AppType.body
                             .copyWith(fontSize: 15, color: AppColors.textTertiary),
                       ),
                     ),
                   ),
+                  if (_controller.text.isNotEmpty)
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () {
+                        _controller.clear();
+                        _debounce?.cancel();
+                        setState(() => _query = '');
+                      },
+                      child: const Icon(Icons.close_rounded,
+                          size: 18, color: AppColors.textTertiary),
+                    ),
                 ],
               ),
             ),
-            const SizedBox(height: 26),
-            if (_recents.isNotEmpty) ...[
-              SectionHeader('Recent searches',
-                  actionLabel: 'Clear', onAction: () => setState(_recents.clear)),
-              const SizedBox(height: 12),
-              for (final r in _recents) _RecentRow(r, onRemove: () => setState(() => _recents.remove(r))),
-              const SizedBox(height: 24),
-            ],
-            const SectionHeader('Browse all'),
-            const SizedBox(height: 14),
-            _CategoryGrid(),
+            const SizedBox(height: 22),
+            if (searching) _Results(query: _query) else _Browse(),
           ],
         ),
       ),
@@ -81,55 +110,105 @@ class _SearchScreenState extends State<SearchScreen> {
   }
 }
 
-class _RecentRow extends StatelessWidget {
-  final PlaylistRef item;
-  final VoidCallback onRemove;
-  const _RecentRow(this.item, {required this.onRemove});
+/// Live results for the current query.
+class _Results extends ConsumerWidget {
+  final String query;
+  const _Results({required this.query});
 
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: Image.asset(item.art, width: 50, height: 50, fit: BoxFit.cover),
-          ),
-          const SizedBox(width: 13),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(item.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppType.label.copyWith(fontSize: 14.5)),
-                const SizedBox(height: 3),
-                Text(item.subtitle, style: AppType.caption),
-              ],
+  Widget build(BuildContext context, WidgetRef ref) {
+    final results = ref.watch(searchResultsProvider(query));
+    return results.when(
+      loading: () => const Padding(
+        padding: EdgeInsets.only(top: 40),
+        child: Center(child: CircularProgressIndicator(color: AppColors.primary)),
+      ),
+      error: (_, _) => _message('Search failed — check your connection'),
+      data: (songs) {
+        if (songs.isEmpty) return _message('No results for “$query”');
+        return Column(
+          children: [
+            for (var i = 0; i < songs.length; i++)
+              _SongRow(song: songs[i], queue: songs, index: i),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _message(String text) => Padding(
+        padding: const EdgeInsets.only(top: 40),
+        child: Center(
+          child: Text(text,
+              style: AppType.bodySm.copyWith(color: AppColors.textSecondary)),
+        ),
+      );
+}
+
+/// A single search result: tap to play (with the result list as the queue),
+/// plus a download control on the right.
+class _SongRow extends ConsumerWidget {
+  final Song song;
+  final List<Song> queue;
+  final int index;
+  const _SongRow({required this.song, required this.queue, required this.index});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final isCurrent = ref.watch(
+        playbackStateProvider.select((s) => s.currentSong?.id == song.id));
+    return InkWell(
+      onTap: () =>
+          ref.read(playbackControllerProvider).playQueue(queue, startIndex: index),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(AppRadius.sm),
+              child: CoverImage(song.coverUrl, width: 50, height: 50),
             ),
-          ),
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: onRemove,
-            child: const Padding(
-              padding: EdgeInsets.all(4),
-              child: Icon(Icons.close_rounded, size: 16, color: AppColors.textTertiary),
+            const SizedBox(width: 13),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(song.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppType.label.copyWith(
+                        fontSize: 14.5,
+                        color: isCurrent
+                            ? AppColors.primaryBright
+                            : AppColors.textPrimary,
+                      )),
+                  const SizedBox(height: 3),
+                  Text(song.artistName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppType.caption),
+                ],
+              ),
             ),
-          ),
-        ],
+            const SizedBox(width: 10),
+            DownloadButton(song, size: 20),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _CategoryGrid extends StatelessWidget {
+/// Default state (no query): the "Browse all" category grid.
+class _Browse extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final items = MockData.categories;
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        const SectionHeader('Browse all'),
+        const SizedBox(height: 14),
         for (var i = 0; i < items.length; i += 2)
           Padding(
             padding: const EdgeInsets.only(bottom: 12),

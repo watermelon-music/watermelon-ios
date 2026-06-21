@@ -103,17 +103,30 @@ lib/
 - Flutter **3.44+** ([install guide](https://docs.flutter.dev/get-started/install))
 - Xcode (iOS) and/or Android Studio (Android)
 
+### Configuration (API keys)
+
+Backend keys live in a gitignored **`.env`** file (loaded at runtime via `flutter_dotenv`). Copy the template and fill in your values:
+
+```bash
+cp .env.example .env   # .env is gitignored
+```
+
+Keys: `SUPABASE_URL`, `SUPABASE_KEY` (anon), `JAMENDO_CLIENT_ID`, `PODCAST_INDEX_API_KEY`, `PODCAST_INDEX_SECRET`, `WATERMELON_API_URL`. Never put a Supabase **service** key in the app. (A compile-time `--dart-define` of the same names also works as a fallback.)
+
 ### Run
 
 ```bash
 # 1. Install dependencies
 flutter pub get
 
-# 2. (Optional) regenerate launcher icons & splash
+# 2. Generate code (Drift database)
+dart run build_runner build
+
+# 3. (Optional) regenerate launcher icons & splash
 dart run flutter_launcher_icons
 dart run flutter_native_splash:create
 
-# 3. Launch on a device or simulator
+# 4. Launch (reads .env automatically)
 flutter run
 ```
 

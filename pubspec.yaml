@@ -38,6 +38,22 @@ dependencies:
   go_router: ^17.3.0
   google_fonts: ^8.1.0
   flutter_svg: ^2.3.0
+  drift: ^2.34.0
+  drift_flutter: ^0.3.0
+  dio: ^5.9.2
+  just_audio: ^0.10.5
+  supabase_flutter: ^2.15.0
+  flutter_dotenv: ^6.0.1
+  youtube_explode_dart: ^3.1.0  # on-device YouTube search + audio extraction (yt-dlp equivalent)
+  path_provider: ^2.1.4         # app downloads directory
+
+# device_info_plus 13.1.0 (pulled transitively via supabase_flutter → passkeys_doctor)
+# calls NSProcessInfo.isiOSAppOnVision, which only exists in the iOS 26.1 SDK
+# (Xcode 26+). On Xcode 16.x this fails to compile. The call was introduced in
+# 12.4.0, so pin to 12.3.0 — the last release without it. passkeys_doctor
+# allows >=11.2.0 <14.0.0.
+dependency_overrides:
+  device_info_plus: 12.3.0
 
 dev_dependencies:
   flutter_test:
@@ -51,6 +67,8 @@ dev_dependencies:
   flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.14.4
   flutter_native_splash: ^2.4.8
+  drift_dev: ^2.34.0
+  build_runner: ^2.15.0
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -64,6 +82,7 @@ flutter:
   uses-material-design: true
 
   assets:
+    - .env                  # secrets loaded at runtime via flutter_dotenv (gitignored)
     - assets/images/        # 1x — Flutter auto-selects 2.0x / 3.0x variants
     - assets/icons/
     - assets/branding/

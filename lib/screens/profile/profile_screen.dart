@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/app_logger.dart';
 import '../../data/mock_data.dart';
 import '../../models/playlist.dart';
+import '../../state/repository_providers.dart';
 import '../../theme/app_assets.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
@@ -12,11 +15,47 @@ import '../../widgets/app_icon.dart';
 const double _kBottomInset = 158; // clears mini-player + tab bar
 
 /// Screen 09 — Profile.
-class ProfileScreen extends StatelessWidget {
+class ProfileScreen extends ConsumerWidget {
   const ProfileScreen({super.key});
 
+  Future<void> _confirmSignOut(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: AppColors.surfaceHigh,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.card),
+        ),
+        title: Text('Log out?', style: AppType.h2.copyWith(fontSize: 19)),
+        content: Text(
+          'You’ll need to log in again to access your library and playlists.',
+          style: AppType.bodySm.copyWith(color: AppColors.textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text('Cancel',
+                style: AppType.label.copyWith(color: AppColors.textSecondary)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text('Log out',
+                style: AppType.label.copyWith(color: AppColors.primaryBright)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    AppLog.auth('signOut confirmed');
+    await ref.read(authRepositoryProvider).signOut();
+    // The router's auth redirect bounces to /onboarding once the session
+    // clears; nudge it explicitly too in case we're already at a public route.
+    if (context.mounted) context.go('/onboarding');
+  }
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
       backgroundColor: AppColors.bg,
       body: Stack(
@@ -63,7 +102,11 @@ class ProfileScreen extends StatelessWidget {
                 const SizedBox(height: 13),
                 const _PlaylistsGrid(),
                 const SizedBox(height: 24),
+                const _AutoplayToggle(),
+                const SizedBox(height: 16),
                 const _SettingsList(),
+                const SizedBox(height: 16),
+                _LogOutButton(onTap: () => _confirmSignOut(context, ref)),
               ],
             ),
           ),
@@ -73,11 +116,87 @@ class ProfileScreen extends StatelessWidget {
   }
 }
 
-class _ProfileHeader extends StatelessWidget {
-  const _ProfileHeader();
+/// Smart-autoplay on/off — drives [autoplayEnabledProvider], which the
+/// recommendation engine reads when refilling the queue at the end of playback.
+class _AutoplayToggle extends ConsumerWidget {
+  const _AutoplayToggle();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final enabled = ref.watch(autoplayEnabledProvider);
+    return Container(
+      height: 60,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceHigh,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Smart autoplay',
+                    style: AppType.body.copyWith(fontSize: 15)),
+                const SizedBox(height: 2),
+                Text('Keep the music going with recommendations',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppType.caption.copyWith(color: AppColors.textTertiary)),
+              ],
+            ),
+          ),
+          Switch.adaptive(
+            value: enabled,
+            activeThumbColor: AppColors.primary,
+            onChanged: (_) =>
+                ref.read(autoplayEnabledProvider.notifier).toggle(),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LogOutButton extends StatelessWidget {
+  final VoidCallback onTap;
+  const _LogOutButton({required this.onTap});
 
   @override
   Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        height: 52,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: AppColors.surfaceHigh,
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          border: Border.all(color: const Color(0x33FF1A1A), width: 1.5),
+        ),
+        child: Text('Log out',
+            style: AppType.label.copyWith(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: AppColors.primaryBright)),
+      ),
+    );
+  }
+}
+
+class _ProfileHeader extends ConsumerWidget {
+  const _ProfileHeader();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final user = ref.watch(currentUserProvider).asData?.value;
+    final name = ref.watch(userDisplayNameProvider);
+    final handle = ref.watch(userHandleProvider);
+    final avatarUrl = user?.avatarUrl;
+    final hasAvatar = avatarUrl != null && avatarUrl.isNotEmpty;
     return Column(
       children: [
         Container(
@@ -89,19 +208,25 @@ class _ProfileHeader extends StatelessWidget {
             boxShadow: const [
               BoxShadow(color: Color(0x80000000), blurRadius: 30, offset: Offset(0, 12)),
             ],
-            image: const DecorationImage(
-              image: AssetImage(AppAssets.melonWhole),
+            image: DecorationImage(
+              image: hasAvatar
+                  ? NetworkImage(avatarUrl)
+                  : const AssetImage(AppAssets.melonWhole) as ImageProvider,
               fit: BoxFit.cover,
             ),
           ),
         ),
         const SizedBox(height: 16),
-        Text(MockData.userFullName,
+        Text(name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: AppType.h2.copyWith(fontSize: 24, letterSpacing: -0.6)),
-        const SizedBox(height: 5),
-        Text(MockData.userHandle,
-            style: AppType.bodySm.copyWith(
-                fontSize: 14, color: AppColors.textSecondary)),
+        if (handle.isNotEmpty) ...[
+          const SizedBox(height: 5),
+          Text(handle,
+              style: AppType.bodySm.copyWith(
+                  fontSize: 14, color: AppColors.textSecondary)),
+        ],
         const SizedBox(height: 18),
         IntrinsicHeight(
           child: Row(

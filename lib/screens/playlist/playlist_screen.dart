@@ -8,7 +8,8 @@ import '../../theme/app_assets.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
-import '../../state/player_controller.dart';
+import '../../state/repository_providers.dart';
+import '../../utils/track_song.dart';
 import '../../widgets/app_icon.dart';
 import '../../widgets/like_button.dart';
 import '../../widgets/mini_player.dart';
@@ -41,9 +42,8 @@ class PlaylistScreen extends ConsumerWidget {
                     child: _ActionRow(
                       likeKey: likeKey,
                       onPlay: () {
-                        ref.read(playerProvider.notifier).play(
-                              playlist.tracks.first,
-                              queue: playlist.tracks,
+                        ref.read(playbackControllerProvider).playQueue(
+                              playlist.tracks.toSongs(),
                             );
                         context.push('/player');
                       },

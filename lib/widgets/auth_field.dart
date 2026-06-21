@@ -13,18 +13,25 @@ class AuthField extends StatefulWidget {
   final String label;
   final String? iconAsset;
   final String initialValue;
+
+  /// Optional externally-owned controller. When provided, the parent owns the
+  /// field's text (and its lifecycle); [initialValue] is ignored.
+  final TextEditingController? controller;
   final bool obscure;
   final TextInputType keyboardType;
   final ValueChanged<String>? onChanged;
+  final bool enabled;
 
   const AuthField({
     super.key,
     required this.label,
     this.iconAsset,
     this.initialValue = '',
+    this.controller,
     this.obscure = false,
     this.keyboardType = TextInputType.text,
     this.onChanged,
+    this.enabled = true,
   });
 
   @override
@@ -32,13 +39,15 @@ class AuthField extends StatefulWidget {
 }
 
 class _AuthFieldState extends State<AuthField> {
-  late final TextEditingController _controller =
-      TextEditingController(text: widget.initialValue);
+  TextEditingController? _internal;
+  TextEditingController get _controller =>
+      widget.controller ?? (_internal ??= TextEditingController(text: widget.initialValue));
   late bool _obscured = widget.obscure;
 
   @override
   void dispose() {
-    _controller.dispose();
+    // Only dispose the controller we created; a parent-owned one is theirs.
+    _internal?.dispose();
     super.dispose();
   }
 
@@ -70,6 +79,7 @@ class _AuthFieldState extends State<AuthField> {
                 child: TextField(
                   controller: _controller,
                   obscureText: _obscured,
+                  enabled: widget.enabled,
                   keyboardType: widget.keyboardType,
                   onChanged: widget.onChanged,
                   cursorColor: AppColors.primary,

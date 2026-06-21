@@ -3,14 +3,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../data/mock_data.dart';
+import '../../domain/models/song.dart';
 import '../../models/playlist.dart';
-import '../../models/track.dart';
 import '../../theme/app_assets.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
-import '../../state/player_controller.dart';
+import '../../state/repository_providers.dart';
+import '../../utils/track_song.dart';
 import '../../widgets/app_icon.dart';
+import '../../widgets/cover_image.dart';
 import '../../widgets/pressable.dart';
 import '../../widgets/section_header.dart';
 
@@ -22,6 +24,7 @@ class HomeScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final name = ref.watch(userFirstNameProvider);
     return Scaffold(
       backgroundColor: AppColors.bg,
       body: Stack(
@@ -54,13 +57,12 @@ class HomeScreen extends ConsumerWidget {
                 const SizedBox(height: AppSpacing.lg),
                 const _JumpBackGrid(),
                 const SizedBox(height: 26),
-                const SectionHeader('Made for Avery', large: true),
+                SectionHeader('Made for $name', large: true),
                 const SizedBox(height: 14),
                 _FeatureCard(
                   onPlay: () {
-                    ref.read(playerProvider.notifier).play(
-                          MockData.sundaySliceTracks.first,
-                          queue: MockData.sundaySliceTracks,
+                    ref.read(playbackControllerProvider).playQueue(
+                          MockData.sundaySliceTracks.toSongs(),
                         );
                     context.push('/player');
                   },
@@ -68,9 +70,7 @@ class HomeScreen extends ConsumerWidget {
                 const SizedBox(height: 26),
                 const SectionHeader('New releases', large: true),
                 const SizedBox(height: 14),
-                _NewReleasesGrid(
-                  onTap: (t) => ref.read(playerProvider.notifier).play(t),
-                ),
+                const _NewReleasesGrid(),
               ],
             ),
           ),
@@ -80,11 +80,12 @@ class HomeScreen extends ConsumerWidget {
   }
 }
 
-class _GreetingHeader extends StatelessWidget {
+class _GreetingHeader extends ConsumerWidget {
   const _GreetingHeader();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final name = ref.watch(userFirstNameProvider);
     return Row(
       children: [
         Expanded(
@@ -94,7 +95,9 @@ class _GreetingHeader extends StatelessWidget {
               Text('Good evening',
                   style: AppType.bodySm.copyWith(color: AppColors.textSecondary)),
               const SizedBox(height: 4),
-              Text(MockData.userName,
+              Text(name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: AppType.h2.copyWith(fontSize: 23, letterSpacing: -0.6)),
             ],
           ),
@@ -285,40 +288,58 @@ class _FeatureCard extends StatelessWidget {
   }
 }
 
-class _NewReleasesGrid extends StatelessWidget {
-  final void Function(Track) onTap;
-  const _NewReleasesGrid({required this.onTap});
+/// "New releases" — live trending songs from the catalog (real, playable).
+/// Tapping plays the whole trending list as the queue, so the autoplay engine
+/// has real songs to continue from. Falls back to a loading shimmer / message.
+class _NewReleasesGrid extends ConsumerWidget {
+  const _NewReleasesGrid();
 
   @override
-  Widget build(BuildContext context) {
-    final items = MockData.newReleases;
-    return Column(
-      children: [
-        for (var i = 0; i < items.length; i += 2)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 14),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(child: _ReleaseItem(items[i], onTap: () => onTap(items[i]))),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: i + 1 < items.length
-                      ? _ReleaseItem(items[i + 1], onTap: () => onTap(items[i + 1]))
-                      : const SizedBox(),
+  Widget build(BuildContext context, WidgetRef ref) {
+    final trending = ref.watch(trendingSongsProvider);
+    return trending.when(
+      loading: () => const _ReleasesPlaceholder(),
+      error: (_, _) => _ReleasesMessage('Couldn’t load new releases'),
+      data: (songs) {
+        if (songs.isEmpty) return _ReleasesMessage('No new releases right now');
+        final items = songs.take(6).toList();
+        return Column(
+          children: [
+            for (var i = 0; i < items.length; i += 2)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 14),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: _ReleaseItem(items[i],
+                          onTap: () => ref
+                              .read(playbackControllerProvider)
+                              .playQueue(items, startIndex: i)),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: i + 1 < items.length
+                          ? _ReleaseItem(items[i + 1],
+                              onTap: () => ref
+                                  .read(playbackControllerProvider)
+                                  .playQueue(items, startIndex: i + 1))
+                          : const SizedBox(),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-          ),
-      ],
+              ),
+          ],
+        );
+      },
     );
   }
 }
 
 class _ReleaseItem extends StatelessWidget {
-  final Track track;
+  final Song song;
   final VoidCallback onTap;
-  const _ReleaseItem(this.track, {required this.onTap});
+  const _ReleaseItem(this.song, {required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -331,21 +352,69 @@ class _ReleaseItem extends StatelessWidget {
             aspectRatio: 1,
             child: ClipRRect(
               borderRadius: BorderRadius.circular(AppRadius.md),
-              child: Image.asset(track.art, fit: BoxFit.cover),
+              child: CoverImage(song.coverUrl, iconSize: 34),
             ),
           ),
           const SizedBox(height: 9),
-          Text(track.title,
+          Text(song.title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: AppType.label.copyWith(fontSize: 14)),
           const SizedBox(height: 2),
-          Text(track.artist,
+          Text(song.artistName,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: AppType.caption),
         ],
       ),
+    );
+  }
+}
+
+class _ReleasesPlaceholder extends StatelessWidget {
+  const _ReleasesPlaceholder();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        for (var r = 0; r < 2; r++)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: Row(
+              children: [
+                for (var c = 0; c < 2; c++) ...[
+                  Expanded(
+                    child: AspectRatio(
+                      aspectRatio: 1,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: AppColors.surfaceHigh,
+                          borderRadius: BorderRadius.circular(AppRadius.md),
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (c == 0) const SizedBox(width: 14),
+                ],
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _ReleasesMessage extends StatelessWidget {
+  final String text;
+  const _ReleasesMessage(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 24),
+      child: Text(text,
+          style: AppType.bodySm.copyWith(color: AppColors.textSecondary)),
     );
   }
 }

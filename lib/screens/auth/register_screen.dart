@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/app_logger.dart';
+import '../../core/result.dart';
+import '../../domain/auth/auth_validators.dart';
+import '../../state/repository_providers.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
@@ -10,20 +15,83 @@ import '../../widgets/square_icon_button.dart';
 
 /// Screen 03 — Register, with a live password-strength meter and a Terms
 /// checkbox.
-class RegisterScreen extends StatefulWidget {
+class RegisterScreen extends ConsumerStatefulWidget {
   const RegisterScreen({super.key});
 
   @override
-  State<RegisterScreen> createState() => _RegisterScreenState();
+  ConsumerState<RegisterScreen> createState() => _RegisterScreenState();
 }
 
-class _RegisterScreenState extends State<RegisterScreen> {
-  String _password = 'watermelon';
+class _RegisterScreenState extends ConsumerState<RegisterScreen> {
+  final _name = TextEditingController();
+  final _email = TextEditingController();
+  final _password = TextEditingController();
   bool _agreed = true;
+  bool _submitting = false;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _email.dispose();
+    _password.dispose();
+    super.dispose();
+  }
+
+  void _snack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _submit() async {
+    if (_submitting) return;
+    final name = _name.text.trim();
+    final email = _email.text.trim();
+    final password = _password.text;
+
+    if (name.isEmpty) {
+      _snack('Enter your name');
+      return;
+    }
+    if (!AuthValidators.isValidEmail(email)) {
+      _snack(AuthValidators.emailError(email)!);
+      return;
+    }
+    if (!AuthValidators.isValidPassword(password)) {
+      _snack(AuthValidators.passwordError(password)!);
+      return;
+    }
+
+    setState(() => _submitting = true);
+    AppLog.auth('signUp start', {'email': email, 'name': name});
+    final result =
+        await ref.read(authRepositoryProvider).signUp(name, email, password);
+    if (!mounted) return;
+    setState(() => _submitting = false);
+
+    switch (result) {
+      case Ok():
+        // If email confirmation is enabled there is no session yet — send the
+        // user to log in after verifying; otherwise they're already signed in.
+        final signedIn =
+            ref.read(supabaseClientProvider).auth.currentSession != null;
+        AppLog.auth('signUp OK', {'email': email, 'hasSession': signedIn});
+        if (signedIn) {
+          context.go('/home');
+        } else {
+          _snack('Account created. Check your email to verify, then log in.');
+          context.go('/login');
+        }
+      case Err(:final error):
+        AppLog.error('auth', 'signUp failed', error: error, data: {'email': email});
+        _snack(authErrorMessage(error));
+    }
+  }
 
   /// 0–4 strength score: length, letters+digits, symbol, length ≥ 10.
   int get _strength {
-    final p = _password;
+    final p = _password.text;
     if (p.isEmpty) return 0;
     var score = 0;
     if (p.length >= 6) score++;
@@ -52,7 +120,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final canSubmit = _agreed;
+    final canSubmit = _agreed && !_submitting;
     return Scaffold(
       body: Stack(
         children: [
@@ -88,19 +156,25 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   Text('Join free. Upgrade to Premium anytime.',
                       style: AppType.bodySm.copyWith(color: AppColors.textSecondary)),
                   const SizedBox(height: 26),
-                  const AuthField(label: 'Name', initialValue: 'Avery Melon'),
+                  AuthField(
+                    label: 'Name',
+                    controller: _name,
+                    enabled: !_submitting,
+                  ),
                   const SizedBox(height: AppSpacing.md),
-                  const AuthField(
+                  AuthField(
                     label: 'Email',
-                    initialValue: 'avery@watermelon.fm',
+                    controller: _email,
+                    enabled: !_submitting,
                     keyboardType: TextInputType.emailAddress,
                   ),
                   const SizedBox(height: AppSpacing.md),
                   AuthField(
                     label: 'Password',
-                    initialValue: _password,
+                    controller: _password,
+                    enabled: !_submitting,
                     obscure: true,
-                    onChanged: (v) => setState(() => _password = v),
+                    onChanged: (_) => setState(() {}),
                   ),
                   const SizedBox(height: 12),
                   _StrengthMeter(score: _strength, label: _strengthLabel, color: _strengthColor),
@@ -110,8 +184,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     onToggle: () => setState(() => _agreed = !_agreed),
                   ),
                   const SizedBox(height: 24),
-                  PrimaryButton('Create account',
-                      onPressed: canSubmit ? () => context.go('/home') : null),
+                  PrimaryButton(_submitting ? 'Creating account…' : 'Create account',
+                      onPressed: canSubmit ? _submit : null),
                   const SizedBox(height: 24),
                   Center(
                     child: GestureDetector(
