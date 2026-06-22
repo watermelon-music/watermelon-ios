@@ -1,0 +1,30 @@
+{
+  "name": "ua_client_hints",
+  "version": "1.7.0",
+  "summary": "Provide User-Agent Client Hints plugin.",
+  "description": "Provide native macOS support for User-Agent Client Hints in Flutter apps.",
+  "homepage": "https://github.com/wasabeef/flutter_ua_client_hints",
+  "license": {
+    "type": "MIT",
+    "file": "../LICENSE"
+  },
+  "authors": {
+    "Daichi Furiya": "dadadada.chop@gmail.com"
+  },
+  "source": {
+    "path": "."
+  },
+  "documentation_url": "https://pub.dev/packages/ua_client_hints",
+  "source_files": "Classes/**/*",
+  "dependencies": {
+    "FlutterMacOS": []
+  },
+  "platforms": {
+    "osx": "10.14"
+  },
+  "pod_target_xcconfig": {
+    "DEFINES_MODULE": "YES"
+  },
+  "swift_versions": "5.0",
+  "swift_version": "5.0"
+}
