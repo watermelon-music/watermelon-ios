@@ -51,3 +51,7 @@ app.*.map.json
 .env
 *.env
 **/local.properties
+
+# Packaged release outputs (produced by `flutter build` + zipping; CI uploads these)
+/myapp/
+/myapp.zip

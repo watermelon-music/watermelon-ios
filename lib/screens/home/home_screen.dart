@@ -6,6 +6,7 @@ import '../../data/mock_data.dart';
 import '../../domain/models/song.dart';
 import '../../models/playlist.dart';
 import '../../theme/app_assets.dart';
+import '../../theme/app_breakpoints.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
@@ -16,7 +17,41 @@ import '../../widgets/cover_image.dart';
 import '../../widgets/pressable.dart';
 import '../../widgets/section_header.dart';
 
-const double _kBottomInset = 158; // clears mini-player + tab bar
+const double _kBottomInset = 158; // clears mini-player + tab bar (phone only)
+
+/// Lays [tiles] out in [columns] equal columns with [spacing] between cells and
+/// [rowGap] between rows; the last row is padded with empty cells so tile widths
+/// stay consistent. Used to scale grids up to more (smaller) columns on desktop.
+Widget _grid({
+  required int columns,
+  required double spacing,
+  required double rowGap,
+  required List<Widget> tiles,
+}) {
+  final rows = <Widget>[];
+  for (var i = 0; i < tiles.length; i += columns) {
+    final cells = <Widget>[];
+    for (var c = 0; c < columns; c++) {
+      final idx = i + c;
+      cells.add(Expanded(
+          child: idx < tiles.length ? tiles[idx] : const SizedBox()));
+      if (c < columns - 1) cells.add(SizedBox(width: spacing));
+    }
+    rows.add(Padding(
+      padding: EdgeInsets.only(bottom: rowGap),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: cells),
+    ));
+  }
+  return Column(children: rows);
+}
+
+/// Phone keeps its fixed 2-up grids; desktop derives a column count from the
+/// available width and a target tile width, so tiles shrink instead of stretch.
+int _columnsFor(BuildContext context, double width, double targetTileWidth,
+    {int min = 2, int max = 8}) {
+  if (!context.isDesktop) return 2;
+  return (width / targetTileWidth).floor().clamp(min, max);
+}
 
 /// Screen 04 — Home.
 class HomeScreen extends ConsumerWidget {
@@ -25,6 +60,9 @@ class HomeScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final name = ref.watch(userFirstNameProvider);
+    final desktop = context.isDesktop;
+    final hPad = desktop ? AppSpacing.xxl : AppSpacing.screenPad;
+    final bottomInset = desktop ? AppSpacing.xl : _kBottomInset;
     return Scaffold(
       backgroundColor: AppColors.bg,
       body: Stack(
@@ -47,10 +85,12 @@ class HomeScreen extends ConsumerWidget {
           ),
           SafeArea(
             bottom: false,
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(
-                  AppSpacing.screenPad, AppSpacing.md, AppSpacing.screenPad, _kBottomInset),
-              children: [
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 1100),
+                child: ListView(
+                  padding: EdgeInsets.fromLTRB(hPad, AppSpacing.md, hPad, bottomInset),
+                  children: [
                 const _GreetingHeader(),
                 const SizedBox(height: AppSpacing.lg),
                 const _FilterChips(),
@@ -71,7 +111,9 @@ class HomeScreen extends ConsumerWidget {
                 const SectionHeader('New releases', large: true),
                 const SizedBox(height: 14),
                 const _NewReleasesGrid(),
-              ],
+                  ],
+                ),
+              ),
             ),
           ),
         ],
@@ -168,24 +210,13 @@ class _JumpBackGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final items = MockData.jumpBack;
-    return Column(
-      children: [
-        for (var i = 0; i < items.length; i += 2)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 9),
-            child: Row(
-              children: [
-                Expanded(child: _JumpBackTile(items[i])),
-                const SizedBox(width: 9),
-                Expanded(
-                  child: i + 1 < items.length
-                      ? _JumpBackTile(items[i + 1])
-                      : const SizedBox(),
-                ),
-              ],
-            ),
-          ),
-      ],
+    return LayoutBuilder(
+      builder: (context, c) => _grid(
+        columns: _columnsFor(context, c.maxWidth, 300, min: 2, max: 4),
+        spacing: 9,
+        rowGap: 9,
+        tiles: [for (final item in items) _JumpBackTile(item)],
+      ),
     );
   }
 }
@@ -302,34 +333,22 @@ class _NewReleasesGrid extends ConsumerWidget {
       error: (_, _) => _ReleasesMessage('Couldn’t load new releases'),
       data: (songs) {
         if (songs.isEmpty) return _ReleasesMessage('No new releases right now');
-        final items = songs.take(6).toList();
-        return Column(
-          children: [
-            for (var i = 0; i < items.length; i += 2)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 14),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: _ReleaseItem(items[i],
-                          onTap: () => ref
-                              .read(playbackControllerProvider)
-                              .playQueue(items, startIndex: i)),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: i + 1 < items.length
-                          ? _ReleaseItem(items[i + 1],
-                              onTap: () => ref
-                                  .read(playbackControllerProvider)
-                                  .playQueue(items, startIndex: i + 1))
-                          : const SizedBox(),
-                    ),
-                  ],
-                ),
-              ),
-          ],
+        // Desktop fits more albums per row, so surface more of them.
+        final items =
+            songs.take(context.isDesktop ? 12 : 6).toList();
+        return LayoutBuilder(
+          builder: (context, c) => _grid(
+            columns: _columnsFor(context, c.maxWidth, 190, min: 2, max: 6),
+            spacing: 14,
+            rowGap: 14,
+            tiles: [
+              for (var i = 0; i < items.length; i++)
+                _ReleaseItem(items[i],
+                    onTap: () => ref
+                        .read(playbackControllerProvider)
+                        .playQueue(items, startIndex: i)),
+            ],
+          ),
         );
       },
     );

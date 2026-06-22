@@ -1,0 +1,194 @@
+name: Build & Release (all platforms)
+
+# Builds Windows, macOS, Linux and Web release artifacts on their native runners.
+# - Push to main     → builds + uploads downloadable artifacts (no Release).
+# - Manual dispatch  → also publishes a GitHub Release.
+# The app version is read from pubspec.yaml (the `version:` field), so the
+# Release is tagged v<version> automatically — no manual tagging required.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Don't pile up redundant runs for the same ref.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: '3.44.0'   # matches the SDK the project is developed against
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows
+            os: windows-latest
+          - target: macos
+            os: macos-latest
+          - target: linux
+            os: ubuntu-latest
+          - target: web
+            os: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      # The app declares `.env` as a bundled asset but it's gitignored, so it
+      # won't exist on the runner. Build it from repo Secrets (Settings →
+      # Secrets and variables → Actions). Any secret left unset expands to an
+      # empty value, and the app degrades gracefully to mock mode for that
+      # integration — so the build succeeds whether or not secrets are present.
+      # Secrets are passed via env (not inlined) so special characters are safe,
+      # and only a non-empty COUNT is logged — never the values themselves.
+      - name: Write .env from secrets
+        shell: bash
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          JAMENDO_CLIENT_ID: ${{ secrets.JAMENDO_CLIENT_ID }}
+          PODCAST_INDEX_API_KEY: ${{ secrets.PODCAST_INDEX_API_KEY }}
+          PODCAST_INDEX_SECRET: ${{ secrets.PODCAST_INDEX_SECRET }}
+          WATERMELON_API_URL: ${{ secrets.WATERMELON_API_URL }}
+        run: |
+          {
+            echo "SUPABASE_URL=${SUPABASE_URL}"
+            echo "SUPABASE_KEY=${SUPABASE_KEY}"
+            echo "JAMENDO_CLIENT_ID=${JAMENDO_CLIENT_ID}"
+            echo "PODCAST_INDEX_API_KEY=${PODCAST_INDEX_API_KEY}"
+            echo "PODCAST_INDEX_SECRET=${PODCAST_INDEX_SECRET}"
+            echo "WATERMELON_API_URL=${WATERMELON_API_URL:-https://watermelon-api-oxx2.onrender.com/}"
+          } > .env
+          echo "Wrote .env ($(grep -cE '=.+' .env) of 6 keys have values)."
+
+      # Native build dependencies for the Linux desktop target (incl. libmpv for
+      # the media_kit audio backend used on Linux).
+      - name: Install Linux build dependencies
+        if: matrix.target == 'linux'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev libstdc++-12-dev \
+            libmpv-dev mpv
+
+      - name: Read version from pubspec.yaml
+        shell: bash
+        run: |
+          VERSION=$(grep -E '^version:' pubspec.yaml | head -1 \
+            | sed -E 's/version:[[:space:]]*//' | cut -d'+' -f1 | tr -d '[:space:]')
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "Building version: $VERSION"
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      # ── Build (each target only runs on its matching runner) ──────────────
+      - name: Build Windows
+        if: matrix.target == 'windows'
+        run: |
+          flutter config --enable-windows-desktop
+          flutter build windows --release
+
+      - name: Build macOS
+        if: matrix.target == 'macos'
+        run: |
+          flutter config --enable-macos-desktop
+          flutter build macos --release
+
+      - name: Build Linux
+        if: matrix.target == 'linux'
+        run: |
+          flutter config --enable-linux-desktop
+          flutter build linux --release
+
+      - name: Build Web
+        if: matrix.target == 'web'
+        run: |
+          flutter config --enable-web
+          flutter build web --release
+
+      # ── Package into a single zip per target ──────────────────────────────
+      - name: Package Windows
+        if: matrix.target == 'windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path build\windows\x64\runner\Release\* `
+            -DestinationPath watermelon-windows-x64-v${{ env.VERSION }}.zip
+
+      - name: Package macOS
+        if: matrix.target == 'macos'
+        shell: bash
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            build/macos/Build/Products/Release/Watermelon.app \
+            "watermelon-macos-v${VERSION}.zip"
+
+      - name: Package Linux
+        if: matrix.target == 'linux'
+        shell: bash
+        run: |
+          (cd build/linux/x64/release/bundle && zip -r - .) \
+            > "watermelon-linux-x64-v${VERSION}.zip"
+
+      - name: Package Web
+        if: matrix.target == 'web'
+        shell: bash
+        run: |
+          (cd build/web && zip -r - .) > "watermelon-web-v${VERSION}.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: watermelon-${{ matrix.target }}
+          path: watermelon-*.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    # Only publish a Release on a manual run — plain pushes just build artifacts.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read version from pubspec.yaml
+        shell: bash
+        run: |
+          VERSION=$(grep -E '^version:' pubspec.yaml | head -1 \
+            | sed -E 's/version:[[:space:]]*//' | cut -d'+' -f1 | tr -d '[:space:]')
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lh dist
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: Watermelon v${{ env.VERSION }}
+          generate_release_notes: true
+          files: dist/*.zip

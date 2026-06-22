@@ -1,7 +1,11 @@
+import 'dart:io' show Platform;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:just_audio_media_kit/just_audio_media_kit.dart';
 
 import 'core/app_logger.dart';
 import 'data/remote/supabase/supabase_init.dart';
@@ -11,6 +15,11 @@ import 'theme/app_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Windows & Linux have no native just_audio backend — register media_kit
+  // (libmpv) for them. macOS/iOS/Android/web use just_audio's own backends.
+  if (!kIsWeb && (Platform.isWindows || Platform.isLinux)) {
+    JustAudioMediaKit.ensureInitialized(windows: true, linux: true);
+  }
   // Load secrets from .env (no-op if the file is absent).
   try {
     await dotenv.load();
