@@ -138,6 +138,11 @@ class PlaybackController extends ChangeNotifier implements StreamingCallback {
     _set(_state.copyWith(positionMs: positionMs));
   }
 
+  /// Output volume, 0.0–1.0. Volume isn't part of [PlaybackState] (the engine
+  /// owns it); the desktop transport bar keeps the slider's value locally.
+  void setVolume(double volume) =>
+      _streaming.setVolume(volume.clamp(0.0, 1.0));
+
   /// User-initiated skip forward (records a skip of the current song).
   Future<void> next() async {
     final current = _state.currentSong;

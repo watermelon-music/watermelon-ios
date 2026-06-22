@@ -47,6 +47,13 @@ dependencies:
   youtube_explode_dart: ^3.1.0  # on-device YouTube search + audio extraction (yt-dlp equivalent)
   path_provider: ^2.1.4         # app downloads directory
 
+  # just_audio's built-in backends cover iOS/Android/macOS/web. Windows & Linux
+  # have no native just_audio implementation, so route them through media_kit.
+  # JustAudioMediaKit.ensureInitialized() in main.dart registers it on those OSes.
+  just_audio_media_kit: ^2.0.6
+  media_kit_libs_windows_audio: any  # native libmpv (Windows-only plugin, no-op elsewhere)
+  media_kit_libs_linux: any          # native libmpv (Linux-only plugin, no-op elsewhere)
+
 # device_info_plus 13.1.0 (pulled transitively via supabase_flutter → passkeys_doctor)
 # calls NSProcessInfo.isiOSAppOnVision, which only exists in the iOS 26.1 SDK
 # (Xcode 26+). On Xcode 16.x this fails to compile. The call was introduced in

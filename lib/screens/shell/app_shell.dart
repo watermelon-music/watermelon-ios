@@ -1,17 +1,36 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../theme/app_breakpoints.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/mini_player.dart';
 import '../../widgets/watermelon_tab_bar.dart';
+import 'desktop_shell.dart';
 
-/// The tabbed shell: hosts the 4 tab branches in an IndexedStack (state
-/// preserved per tab) with a persistent mini-player + tab bar overlaid at the
-/// bottom. Full-screen routes (player, playlist, subscription) push above this.
+/// Adaptive app shell. On wide windows (web / desktop) it renders the
+/// [DesktopShell] — a left sidebar + persistent bottom transport bar. On phones
+/// it keeps the original layout: the navigation branches in an IndexedStack
+/// (state preserved per tab) with a floating mini-player + tab bar overlaid at
+/// the bottom. Full-screen routes (player, playlist, subscription) push above.
 class AppShell extends StatelessWidget {
   final StatefulNavigationShell navigationShell;
 
   const AppShell({super.key, required this.navigationShell});
+
+  @override
+  Widget build(BuildContext context) {
+    if (context.isDesktop) {
+      return DesktopShell(navigationShell: navigationShell);
+    }
+    return _MobileShell(navigationShell: navigationShell);
+  }
+}
+
+/// The original phone layout, unchanged.
+class _MobileShell extends StatelessWidget {
+  final StatefulNavigationShell navigationShell;
+
+  const _MobileShell({required this.navigationShell});
 
   @override
   Widget build(BuildContext context) {

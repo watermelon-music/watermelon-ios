@@ -1,6 +1,0 @@
-framework module ua_client_hints {
-  umbrella header "ua_client_hints-umbrella.h"
-
-  export *
-  module * { export * }
-}

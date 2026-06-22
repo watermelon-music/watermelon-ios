@@ -2,7 +2,9 @@ import 'package:flutter/material.dart' hide RepeatMode;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../domain/models/song.dart';
 import '../../theme/app_assets.dart';
+import '../../theme/app_breakpoints.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
@@ -47,75 +49,165 @@ class NowPlayingScreen extends ConsumerWidget {
       );
     }
 
+    return Scaffold(
+      body: DecoratedBox(
+        decoration: const BoxDecoration(gradient: AppColors.playerGradient),
+        child: SafeArea(
+          // Decide from the actual available width (robust inside the pushed
+          // modal route) rather than the window-level MediaQuery.
+          child: LayoutBuilder(
+            builder: (context, constraints) =>
+                constraints.maxWidth >= AppBreakpoints.desktop
+                    ? _DesktopPlayerBody(
+                        state: state, controller: controller, song: song)
+                    : _MobilePlayerBody(
+                        state: state, controller: controller, song: song),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Phone layout — a vertical stack that fills the screen width (unchanged).
+class _MobilePlayerBody extends StatelessWidget {
+  final PlaybackState state;
+  final PlaybackController controller;
+  final Song song;
+  const _MobilePlayerBody(
+      {required this.state, required this.controller, required this.song});
+
+  @override
+  Widget build(BuildContext context) {
     final position = Duration(milliseconds: state.positionMs);
     final duration = Duration(milliseconds: state.durationMs);
     final progress = state.durationMs > 0
         ? (state.positionMs / state.durationMs).clamp(0.0, 1.0)
         : 0.0;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(26, 8, 26, 20),
+      child: Column(
+        children: [
+          _Header(onClose: () => context.pop()),
+          const SizedBox(height: 30),
+          _Artwork(song: song, iconSize: 64),
+          const SizedBox(height: 34),
+          _TitleRow(song: song),
+          const SizedBox(height: 24),
+          _Scrubber(
+            progress: progress.toDouble(),
+            elapsed: formatDuration(position),
+            remaining: formatRemaining(duration, position),
+            onSeek: (f) => controller.seekTo((state.durationMs * f).round()),
+          ),
+          const SizedBox(height: 20),
+          _Transport(state: state, controller: controller),
+          const Spacer(),
+          const _BottomBar(),
+        ],
+      ),
+    );
+  }
+}
 
-    return Scaffold(
-      body: DecoratedBox(
-        decoration: const BoxDecoration(gradient: AppColors.playerGradient),
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(26, 8, 26, 20),
-            child: Column(
-              children: [
-                _Header(onClose: () => context.pop()),
-                const SizedBox(height: 30),
-                // Artwork.
-                AspectRatio(
-                  aspectRatio: 1,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(AppRadius.xl),
-                      boxShadow: AppShadow.artwork,
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: CoverImage(song.coverUrl, iconSize: 64),
-                  ),
-                ),
-                const SizedBox(height: 34),
-                // Title + like.
-                Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(song.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: AppType.h2.copyWith(fontSize: 26, letterSpacing: -0.8)),
-                          const SizedBox(height: 5),
-                          Text(song.artistName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: AppType.body.copyWith(color: AppColors.textSecondary)),
-                        ],
-                      ),
-                    ),
-                    LikeButton(
-                        id: song.id, size: 28, inactiveColor: AppColors.textPrimary),
-                  ],
-                ),
-                const SizedBox(height: 24),
-                _Scrubber(
-                  progress: progress.toDouble(),
-                  elapsed: formatDuration(position),
-                  remaining: formatRemaining(duration, position),
-                  onSeek: (f) =>
-                      controller.seekTo((state.durationMs * f).round()),
-                ),
-                const SizedBox(height: 20),
-                _Transport(state: state, controller: controller),
-                const Spacer(),
-                const _BottomBar(),
-              ],
-            ),
+/// Desktop / wide layout — centered and width-constrained, with artwork that
+/// scales to the available height instead of stretching across the window.
+class _DesktopPlayerBody extends StatelessWidget {
+  final PlaybackState state;
+  final PlaybackController controller;
+  final Song song;
+  const _DesktopPlayerBody(
+      {required this.state, required this.controller, required this.song});
+
+  @override
+  Widget build(BuildContext context) {
+    final position = Duration(milliseconds: state.positionMs);
+    final duration = Duration(milliseconds: state.durationMs);
+    final progress = state.durationMs > 0
+        ? (state.positionMs / state.durationMs).clamp(0.0, 1.0)
+        : 0.0;
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 540),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(32, 14, 32, 30),
+          child: Column(
+            children: [
+              _Header(onClose: () => context.pop()),
+              const SizedBox(height: 22),
+              // Artwork fills the available vertical space, capped square.
+              Expanded(child: Center(child: _Artwork(song: song, iconSize: 84))),
+              const SizedBox(height: 30),
+              _TitleRow(song: song),
+              const SizedBox(height: 22),
+              _Scrubber(
+                progress: progress.toDouble(),
+                elapsed: formatDuration(position),
+                remaining: formatRemaining(duration, position),
+                onSeek: (f) => controller.seekTo((state.durationMs * f).round()),
+              ),
+              const SizedBox(height: 18),
+              _Transport(state: state, controller: controller),
+              const SizedBox(height: 24),
+              const _BottomBar(),
+            ],
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Square album artwork with the rounded corners + drop shadow.
+class _Artwork extends StatelessWidget {
+  final Song song;
+  final double iconSize;
+  const _Artwork({required this.song, this.iconSize = 64});
+
+  @override
+  Widget build(BuildContext context) {
+    return AspectRatio(
+      aspectRatio: 1,
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(AppRadius.xl),
+          boxShadow: AppShadow.artwork,
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: CoverImage(song.coverUrl, iconSize: iconSize),
+      ),
+    );
+  }
+}
+
+/// Track title + artist with a like button trailing.
+class _TitleRow extends StatelessWidget {
+  final Song song;
+  const _TitleRow({required this.song});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(song.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppType.h2.copyWith(fontSize: 26, letterSpacing: -0.8)),
+              const SizedBox(height: 5),
+              Text(song.artistName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppType.body.copyWith(color: AppColors.textSecondary)),
+            ],
+          ),
+        ),
+        LikeButton(
+            id: song.id, size: 28, inactiveColor: AppColors.textPrimary),
+      ],
     );
   }
 }

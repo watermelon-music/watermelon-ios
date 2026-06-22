@@ -1,0 +1,426 @@
+name: Release
+
+# Builds every platform on its native runner and publishes a GitHub Release.
+# Trigger manually from the Actions tab (Run workflow). The version is the single
+# source of truth in pubspec.yaml — the Release is tagged v<version>.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  FLUTTER_VERSION: '3.44.0'
+  FLUTTER_CHANNEL: 'stable'
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────
+  build-macos:
+    name: Build macOS (universal + arm64 + x64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: ${{ env.FLUTTER_CHANNEL }}
+
+      # The app bundles a gitignored .env asset; create it (from repo secrets,
+      # empty fallback → mock mode) so the build doesn't fail on a missing asset.
+      - name: Create .env
+        shell: bash
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          JAMENDO_CLIENT_ID: ${{ secrets.JAMENDO_CLIENT_ID }}
+          PODCAST_INDEX_API_KEY: ${{ secrets.PODCAST_INDEX_API_KEY }}
+          PODCAST_INDEX_SECRET: ${{ secrets.PODCAST_INDEX_SECRET }}
+          WATERMELON_API_URL: ${{ secrets.WATERMELON_API_URL }}
+        run: |
+          {
+            echo "SUPABASE_URL=${SUPABASE_URL}"
+            echo "SUPABASE_KEY=${SUPABASE_KEY}"
+            echo "JAMENDO_CLIENT_ID=${JAMENDO_CLIENT_ID}"
+            echo "PODCAST_INDEX_API_KEY=${PODCAST_INDEX_API_KEY}"
+            echo "PODCAST_INDEX_SECRET=${PODCAST_INDEX_SECRET}"
+            echo "WATERMELON_API_URL=${WATERMELON_API_URL:-https://watermelon-api-oxx2.onrender.com/}"
+          } > .env
+
+      - name: Resolve version
+        id: ver
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed -E 's/^version:[[:space:]]*([^+]+).*/\1/' | tr -d '[:space:]')
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - run: flutter pub get
+
+      - name: Build macOS app (universal)
+        run: flutter build macos --release
+
+      - name: Verify universal binary
+        run: |
+          BIN="build/macos/Build/Products/Release/Watermelon.app/Contents/MacOS/Watermelon"
+          lipo -info "$BIN"
+          lipo -info "$BIN" | grep -E 'arm64' && lipo -info "$BIN" | grep -E 'x86_64'
+
+      - name: Package DMGs (universal, arm64, x64)
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          SRC="build/macos/Build/Products/Release/Watermelon.app"
+
+          thin_app() {
+            local app="$1" arch="$2"
+            find "$app" -type f -print0 | while IFS= read -r -d '' f; do
+              if file -b "$f" | grep -q "Mach-O.*universal"; then
+                lipo "$f" -thin "$arch" -output "$f.tmp" && mv "$f.tmp" "$f"
+              fi
+            done
+            # Re-sign ad-hoc since lipo invalidated signatures.
+            codesign --force --deep --sign - "$app"
+          }
+
+          package_dmg() {
+            local flavor="$1" arch="$2"   # empty arch = universal (no thinning)
+            local stage="dist/$flavor"
+            local app_copy="$stage/Watermelon.app"
+            rm -rf "$stage"; mkdir -p "$stage"
+            cp -R "$SRC" "$app_copy"
+            ln -s /Applications "$stage/Applications"
+            if [ -n "$arch" ]; then
+              thin_app "$app_copy" "$arch"
+              lipo -info "$app_copy/Contents/MacOS/Watermelon"
+            fi
+            hdiutil create -volname "Watermelon" -srcfolder "$stage" \
+              -ov -format UDZO "watermelon-${VERSION}-macos-${flavor}.dmg"
+          }
+
+          package_dmg "universal" ""
+          package_dmg "arm64"     "arm64"
+          package_dmg "x64"       "x86_64"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: watermelon-*-macos-*.dmg
+          if-no-files-found: error
+
+  # ────────────────────────────────────────────────────────────────────────
+  build-ios:
+    name: Build iOS (unsigned)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: ${{ env.FLUTTER_CHANNEL }}
+
+      - name: Create .env
+        shell: bash
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          JAMENDO_CLIENT_ID: ${{ secrets.JAMENDO_CLIENT_ID }}
+          PODCAST_INDEX_API_KEY: ${{ secrets.PODCAST_INDEX_API_KEY }}
+          PODCAST_INDEX_SECRET: ${{ secrets.PODCAST_INDEX_SECRET }}
+          WATERMELON_API_URL: ${{ secrets.WATERMELON_API_URL }}
+        run: |
+          {
+            echo "SUPABASE_URL=${SUPABASE_URL}"
+            echo "SUPABASE_KEY=${SUPABASE_KEY}"
+            echo "JAMENDO_CLIENT_ID=${JAMENDO_CLIENT_ID}"
+            echo "PODCAST_INDEX_API_KEY=${PODCAST_INDEX_API_KEY}"
+            echo "PODCAST_INDEX_SECRET=${PODCAST_INDEX_SECRET}"
+            echo "WATERMELON_API_URL=${WATERMELON_API_URL:-https://watermelon-api-oxx2.onrender.com/}"
+          } > .env
+
+      - name: Resolve version
+        id: ver
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed -E 's/^version:[[:space:]]*([^+]+).*/\1/' | tr -d '[:space:]')
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - run: flutter pub get
+
+      # No signing certificates in CI, so build without code signing. The result
+      # is an unsigned .app (not an installable .ipa) — useful for testing/sideload
+      # via tools; store-ready builds need certs/provisioning wired via secrets.
+      - name: Build iOS (no codesign)
+        run: flutter build ios --release --no-codesign
+
+      - name: Package unsigned app
+        run: |
+          cd build/ios/iphoneos
+          zip -r "$GITHUB_WORKSPACE/watermelon-${{ steps.ver.outputs.version }}-ios-unsigned.zip" Runner.app
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios
+          path: watermelon-*-ios-unsigned.zip
+          if-no-files-found: error
+
+  # ────────────────────────────────────────────────────────────────────────
+  build-android:
+    name: Build Android (APK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: ${{ env.FLUTTER_CHANNEL }}
+
+      - name: Create .env
+        shell: bash
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          JAMENDO_CLIENT_ID: ${{ secrets.JAMENDO_CLIENT_ID }}
+          PODCAST_INDEX_API_KEY: ${{ secrets.PODCAST_INDEX_API_KEY }}
+          PODCAST_INDEX_SECRET: ${{ secrets.PODCAST_INDEX_SECRET }}
+          WATERMELON_API_URL: ${{ secrets.WATERMELON_API_URL }}
+        run: |
+          {
+            echo "SUPABASE_URL=${SUPABASE_URL}"
+            echo "SUPABASE_KEY=${SUPABASE_KEY}"
+            echo "JAMENDO_CLIENT_ID=${JAMENDO_CLIENT_ID}"
+            echo "PODCAST_INDEX_API_KEY=${PODCAST_INDEX_API_KEY}"
+            echo "PODCAST_INDEX_SECRET=${PODCAST_INDEX_SECRET}"
+            echo "WATERMELON_API_URL=${WATERMELON_API_URL:-https://watermelon-api-oxx2.onrender.com/}"
+          } > .env
+
+      - name: Resolve version
+        id: ver
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed -E 's/^version:[[:space:]]*([^+]+).*/\1/' | tr -d '[:space:]')
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - run: flutter pub get
+
+      # Release APK is debug-signed (the Flutter template's default). For a
+      # Play-Store build, add a release keystore + key.properties via secrets.
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Rename APK
+        run: |
+          mv build/app/outputs/flutter-apk/app-release.apk \
+             "watermelon-${{ steps.ver.outputs.version }}-android.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: watermelon-*-android.apk
+          if-no-files-found: error
+
+  # ────────────────────────────────────────────────────────────────────────
+  build-windows:
+    name: Build Windows (x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: ${{ env.FLUTTER_CHANNEL }}
+
+      - name: Create .env
+        shell: bash
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          JAMENDO_CLIENT_ID: ${{ secrets.JAMENDO_CLIENT_ID }}
+          PODCAST_INDEX_API_KEY: ${{ secrets.PODCAST_INDEX_API_KEY }}
+          PODCAST_INDEX_SECRET: ${{ secrets.PODCAST_INDEX_SECRET }}
+          WATERMELON_API_URL: ${{ secrets.WATERMELON_API_URL }}
+        run: |
+          {
+            echo "SUPABASE_URL=${SUPABASE_URL}"
+            echo "SUPABASE_KEY=${SUPABASE_KEY}"
+            echo "JAMENDO_CLIENT_ID=${JAMENDO_CLIENT_ID}"
+            echo "PODCAST_INDEX_API_KEY=${PODCAST_INDEX_API_KEY}"
+            echo "PODCAST_INDEX_SECRET=${PODCAST_INDEX_SECRET}"
+            echo "WATERMELON_API_URL=${WATERMELON_API_URL:-https://watermelon-api-oxx2.onrender.com/}"
+          } > .env
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed -E 's/^version:[[:space:]]*([^+]+).*/\1/' | tr -d '[:space:]')
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - run: flutter pub get
+
+      - name: Build Windows app
+        run: flutter build windows --release
+
+      - name: Package zip
+        shell: pwsh
+        run: |
+          $version = "${{ steps.ver.outputs.version }}"
+          Compress-Archive -Path "build/windows/x64/runner/Release/*" `
+            -DestinationPath "watermelon-$version-windows-x64.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: watermelon-*-windows-x64.zip
+          if-no-files-found: error
+
+  # ────────────────────────────────────────────────────────────────────────
+  build-linux:
+    name: Build Linux (x64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev libstdc++-12-dev \
+            libmpv-dev mpv
+          # libmpv/mpv: required by the media_kit audio backend on Linux.
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: ${{ env.FLUTTER_CHANNEL }}
+
+      - name: Create .env
+        shell: bash
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          JAMENDO_CLIENT_ID: ${{ secrets.JAMENDO_CLIENT_ID }}
+          PODCAST_INDEX_API_KEY: ${{ secrets.PODCAST_INDEX_API_KEY }}
+          PODCAST_INDEX_SECRET: ${{ secrets.PODCAST_INDEX_SECRET }}
+          WATERMELON_API_URL: ${{ secrets.WATERMELON_API_URL }}
+        run: |
+          {
+            echo "SUPABASE_URL=${SUPABASE_URL}"
+            echo "SUPABASE_KEY=${SUPABASE_KEY}"
+            echo "JAMENDO_CLIENT_ID=${JAMENDO_CLIENT_ID}"
+            echo "PODCAST_INDEX_API_KEY=${PODCAST_INDEX_API_KEY}"
+            echo "PODCAST_INDEX_SECRET=${PODCAST_INDEX_SECRET}"
+            echo "WATERMELON_API_URL=${WATERMELON_API_URL:-https://watermelon-api-oxx2.onrender.com/}"
+          } > .env
+
+      - name: Resolve version
+        id: ver
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed -E 's/^version:[[:space:]]*([^+]+).*/\1/' | tr -d '[:space:]')
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - run: flutter pub get
+
+      - name: Build Linux app
+        run: flutter build linux --release
+
+      - name: Package tarball
+        run: |
+          tar -czf "watermelon-${{ steps.ver.outputs.version }}-linux-x64.tar.gz" \
+            -C build/linux/x64/release/bundle .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: watermelon-*-linux-x64.tar.gz
+          if-no-files-found: error
+
+  # ────────────────────────────────────────────────────────────────────────
+  build-web:
+    name: Build Web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: ${{ env.FLUTTER_CHANNEL }}
+
+      - name: Create .env
+        shell: bash
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          JAMENDO_CLIENT_ID: ${{ secrets.JAMENDO_CLIENT_ID }}
+          PODCAST_INDEX_API_KEY: ${{ secrets.PODCAST_INDEX_API_KEY }}
+          PODCAST_INDEX_SECRET: ${{ secrets.PODCAST_INDEX_SECRET }}
+          WATERMELON_API_URL: ${{ secrets.WATERMELON_API_URL }}
+        run: |
+          {
+            echo "SUPABASE_URL=${SUPABASE_URL}"
+            echo "SUPABASE_KEY=${SUPABASE_KEY}"
+            echo "JAMENDO_CLIENT_ID=${JAMENDO_CLIENT_ID}"
+            echo "PODCAST_INDEX_API_KEY=${PODCAST_INDEX_API_KEY}"
+            echo "PODCAST_INDEX_SECRET=${PODCAST_INDEX_SECRET}"
+            echo "WATERMELON_API_URL=${WATERMELON_API_URL:-https://watermelon-api-oxx2.onrender.com/}"
+          } > .env
+
+      - name: Resolve version
+        id: ver
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed -E 's/^version:[[:space:]]*([^+]+).*/\1/' | tr -d '[:space:]')
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - run: flutter pub get
+
+      - name: Build Web app
+        run: flutter build web --release
+
+      - name: Package zip
+        run: |
+          cd build/web
+          zip -r "$GITHUB_WORKSPACE/watermelon-${{ steps.ver.outputs.version }}-web.zip" .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web
+          path: watermelon-*-web.zip
+          if-no-files-found: error
+
+  # ────────────────────────────────────────────────────────────────────────
+  release:
+    name: Publish GitHub Release
+    needs: [build-macos, build-ios, build-android, build-windows, build-linux, build-web]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Resolve tag
+        id: ver
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed -E 's/^version:[[:space:]]*([^+]+).*/\1/' | tr -d '[:space:]')
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: Watermelon ${{ steps.ver.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            artifacts/macos/*.dmg
+            artifacts/ios/*.zip
+            artifacts/android/*.apk
+            artifacts/windows/*.zip
+            artifacts/linux/*.tar.gz
+            artifacts/web/*.zip
